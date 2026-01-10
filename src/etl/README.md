@@ -55,11 +55,17 @@ Configure AWS Glue jobs with job parameters:
 }
 ```
 
+
+
 # Run Locally
-AWS Docs: [Develop and test AWS Glue jobs locally using a Docker image](https://docs.aws.amazon.com/glue/latest/dg/develop-local-docker-image.html)
+Setup local environment
+```
+python -m venv venv_etl
+source venv_etl/bin/activate
+pip install -r requirements.txt
+```
 
-
-Pull docker image
+Pull docker image (AWS Docs: [Develop and test AWS Glue jobs locally using a Docker image](https://docs.aws.amazon.com/glue/latest/dg/develop-local-docker-image.html))
 ```bash
 docker pull public.ecr.aws/glue/aws-glue-libs:5 
 ```
@@ -69,30 +75,30 @@ Created named profile my-glue-profile using access key 'local-glue-container' fo
 Specify named profile, glue workspace directory, script name, additional python files, job params
 ```bash
 export PROFILE_NAME=my-glue-profile
-export WORKSPACE_LOCATION=/Users/juno/dev/dea/nh-healthcare/src/glue-parquet/glue_workspace
+export WORKSPACE_LOCATION=/Users/juno/dev/dea/nh-healthcare-pipeline/src/etl/glue_jobs
 ```
 
 ### BRONZE JOB
 ```bash
 export SCRIPT_FILE_NAME=run_bronze.py
-export EXTRA_PY_FILES=/home/hadoop/workspace/src/config.py,/home/hadoop/workspace/src/main_bronze.py
+export EXTRA_PY_FILES=/home/hadoop/workspace/config.py,/home/hadoop/workspace/main_bronze.py
 export JOB_NAME=bronze-local-job
 export PIPELINE_MODE=incremental
 export START_DATE=2026-01-04
 export SAMPLE=false
 
-docker run -it --rm -v ~/.aws:/home/hadoop/.aws -v $WORKSPACE_LOCATION:/home/hadoop/workspace/ -e AWS_PROFILE=$PROFILE_NAME --name glue5_spark_submit public.ecr.aws/glue/aws-glue-libs:5 spark-submit /home/hadoop/workspace/src/$SCRIPT_FILE_NAME --extra-py-files $EXTRA_PY_FILES --JOB_NAME $JOB_NAME --PIPELINE_MODE $PIPELINE_MODE --START_DATE $START_DATE --SAMPLE $SAMPLE
+docker run -it --rm -v ~/.aws:/home/hadoop/.aws -v $WORKSPACE_LOCATION:/home/hadoop/workspace/ -e AWS_PROFILE=$PROFILE_NAME --name glue5_spark_submit public.ecr.aws/glue/aws-glue-libs:5 spark-submit /home/hadoop/workspace/$SCRIPT_FILE_NAME --extra-py-files $EXTRA_PY_FILES --JOB_NAME $JOB_NAME --PIPELINE_MODE $PIPELINE_MODE --START_DATE $START_DATE --SAMPLE $SAMPLE
 ```
 ### SILVER JOB
 ```bash
 export SCRIPT_FILE_NAME=run_silver.py
-export EXTRA_PY_FILES=/home/hadoop/workspace/src/config.py,/home/hadoop/workspace/src/main_silver.py
+export EXTRA_PY_FILES=/home/hadoop/workspace/config.py,/home/hadoop/workspace/main_silver.py
 export JOB_NAME=silver-local-job
 export PIPELINE_MODE=incremental
 export START_DATE=2026-01-04
 export SAMPLE=false
 
-docker run -it --rm -v ~/.aws:/home/hadoop/.aws -v $WORKSPACE_LOCATION:/home/hadoop/workspace/ -e AWS_PROFILE=$PROFILE_NAME --name glue5_spark_submit public.ecr.aws/glue/aws-glue-libs:5 spark-submit /home/hadoop/workspace/src/$SCRIPT_FILE_NAME --extra-py-files $EXTRA_PY_FILES --JOB_NAME $JOB_NAME --PIPELINE_MODE $PIPELINE_MODE --START_DATE $START_DATE --SAMPLE $SAMPLE
+docker run -it --rm -v ~/.aws:/home/hadoop/.aws -v $WORKSPACE_LOCATION:/home/hadoop/workspace/ -e AWS_PROFILE=$PROFILE_NAME --name glue5_spark_submit public.ecr.aws/glue/aws-glue-libs:5 spark-submit /home/hadoop/workspace/$SCRIPT_FILE_NAME --extra-py-files $EXTRA_PY_FILES --JOB_NAME $JOB_NAME --PIPELINE_MODE $PIPELINE_MODE --START_DATE $START_DATE --SAMPLE $SAMPLE
 ```
 Formatted command (above) for running container via spark-submit
 
@@ -103,7 +109,7 @@ docker run -it --rm \
   -e AWS_PROFILE=$PROFILE_NAME \
   --name glue5_spark_submit \
   public.ecr.aws/glue/aws-glue-libs:5 \
-  spark-submit /home/hadoop/workspace/src/$SCRIPT_FILE_NAME \
+  spark-submit /home/hadoop/workspace/$SCRIPT_FILE_NAME \
     --extra-py-files $EXTRA_PY_FILES \
     --JOB_NAME $JOB_NAME \
     --PIPELINE_MODE $PIPELINE_MODE \
