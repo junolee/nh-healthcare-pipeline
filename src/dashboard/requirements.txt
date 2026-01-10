@@ -1,0 +1,8 @@
+boto3
+awswrangler
+streamlit
+pandas
+numpy
+matplotlib
+plotly
+seaborn

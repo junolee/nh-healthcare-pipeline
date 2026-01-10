@@ -1,0 +1,5 @@
+google-api-python-client
+google-auth-httplib2
+google-auth-oauthlib
+# excludes boto3 (included in lambda runtime)
+# excludes python-dotenv (used for local development)
