@@ -5,15 +5,13 @@
 from config import *
 
 
-def load_bronze_table(spark, table, start_date, sample):
+def load_bronze_table(spark, table, start_date):
   df = spark.table(table)
   df = df.filter(F.col("ingest_date") >= start_date) 
-  if sample: 
-    df = df.sample(0.05)
   info(f"Reading from table: {table}\n{df.count()} new records after start_date: {start_date}")
   return df
 
-def main_silver(spark, job_name, pipeline_mode, start_date, sample):
+def main_silver(spark, job_name, pipeline_mode, start_date):
 
   c = load_config(job_name="SILVER JOB")
   info(f"Starting job {c.job_name} in {c.env} environment.")
@@ -37,11 +35,11 @@ def main_silver(spark, job_name, pipeline_mode, start_date, sample):
     
 
     if silver_table == "fct_staffing_levels":
-      inputDF = load_bronze_table(spark, f"{c.bronze_fqn}.{bronze_table}", start_date, sample)
+      inputDF = load_bronze_table(spark, f"{c.bronze_fqn}.{bronze_table}", start_date)
       cleanDF = silver_functions[silver_table](inputDF).withColumn("updated_at", F.current_timestamp())
       overwrite_partitions(spark, cleanDF, table=f"{c.silver_db}.{silver_table}", partition_col="ingest_date")
     else:
-      inputDF = load_bronze_table(spark, f"{c.bronze_fqn}.{bronze_table}", NO_START_DATE, sample)
+      inputDF = load_bronze_table(spark, f"{c.bronze_fqn}.{bronze_table}", NO_START_DATE)
       cleanDF = silver_functions[silver_table](inputDF).withColumn("updated_at", F.current_timestamp())
       overwrite_table(cleanDF, table=f"{c.silver_db}.{silver_table}")
 

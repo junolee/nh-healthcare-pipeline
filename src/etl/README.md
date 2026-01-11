@@ -73,13 +73,12 @@ docker pull public.ecr.aws/glue/aws-glue-libs:5
 Created named profile my-glue-profile using access key 'local-glue-container' for IAM user with required permissions
 
 Specify named profile, glue workspace directory, script name, additional python files, job params
-```bash
-export PROFILE_NAME=my-glue-profile
-export WORKSPACE_LOCATION=/Users/juno/dev/dea/nh-healthcare-pipeline/src/etl/glue_jobs
-```
 
 ### BRONZE JOB
 ```bash
+export PROFILE_NAME=my-glue-profile
+export WORKSPACE_LOCATION=/Users/juno/dev/dea/nh-healthcare-pipeline/src/etl/glue_jobs
+
 export SCRIPT_FILE_NAME=run_bronze.py
 export EXTRA_PY_FILES=/home/hadoop/workspace/config.py,/home/hadoop/workspace/main_bronze.py
 export JOB_NAME=bronze-local-job
@@ -91,14 +90,16 @@ docker run -it --rm -v ~/.aws:/home/hadoop/.aws -v $WORKSPACE_LOCATION:/home/had
 ```
 ### SILVER JOB
 ```bash
+export PROFILE_NAME=my-glue-profile
+export WORKSPACE_LOCATION=/Users/juno/dev/dea/nh-healthcare-pipeline/src/etl/glue_jobs
+
 export SCRIPT_FILE_NAME=run_silver.py
 export EXTRA_PY_FILES=/home/hadoop/workspace/config.py,/home/hadoop/workspace/main_silver.py
 export JOB_NAME=silver-local-job
 export PIPELINE_MODE=incremental
 export START_DATE=2026-01-04
-export SAMPLE=false
 
-docker run -it --rm -v ~/.aws:/home/hadoop/.aws -v $WORKSPACE_LOCATION:/home/hadoop/workspace/ -e AWS_PROFILE=$PROFILE_NAME --name glue5_spark_submit public.ecr.aws/glue/aws-glue-libs:5 spark-submit /home/hadoop/workspace/$SCRIPT_FILE_NAME --extra-py-files $EXTRA_PY_FILES --JOB_NAME $JOB_NAME --PIPELINE_MODE $PIPELINE_MODE --START_DATE $START_DATE --SAMPLE $SAMPLE
+docker run -it --rm -v ~/.aws:/home/hadoop/.aws -v $WORKSPACE_LOCATION:/home/hadoop/workspace/ -e AWS_PROFILE=$PROFILE_NAME --name glue5_spark_submit public.ecr.aws/glue/aws-glue-libs:5 spark-submit /home/hadoop/workspace/$SCRIPT_FILE_NAME --extra-py-files $EXTRA_PY_FILES --JOB_NAME $JOB_NAME --PIPELINE_MODE $PIPELINE_MODE --START_DATE $START_DATE
 ```
 Formatted command (above) for running container via spark-submit
 
