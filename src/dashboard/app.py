@@ -15,8 +15,13 @@ def get_analytics_df():
   dates = load_table("dim_dates")[["date","day_of_week","day_of_week_name","is_weekday"]]
   staff = load_table("fct_staffing_levels")[["provider_id","work_date","num_patients","hrs_registered_nurses"]]
   prov = load_table("dim_providers")[["provider_id","provider_name","provider_state","ownership_type","num_certified_beds", "substantiated_complaints", "rn_turnover", "qm_rating"]].sample(400)
+  claim = load_table("dim_claims")[['provider_id', 'measure_code','measure_description','observed_score']]
+  claim = claim[claim['measure_code'] == 521]  #  % short-stay residents rehospitalized after a NH admission)
+  claim['readmission_rate'] = claim['observed_score']  
+  claim = claim[['provider_id', 'readmission_rate']]
   df = (staff
         .merge(prov, on="provider_id")
+        .merge(claim, on="provider_id")
         .merge(dates, left_on="work_date", right_on="date")
         .drop(columns=["work_date"])
   )
@@ -27,10 +32,9 @@ def get_analytics_df():
   return df
 
 @st.cache_data
-def filter_df(df, start, end, state=None, providers=None):
+def filter_df(df, start, end, states=None, providers=None):
   df = df[(df["date"] >= start) & (df["date"] <= end)]
-  # df = df[(df["is_weekday"] == True)]
-  if state: df = df[df["provider_state"].isin(state)]
+  if states: df = df[df["provider_state"].isin(state)]
   if providers: df = df[df["provider_id"].isin(providers)]
   return df
 
@@ -42,11 +46,11 @@ df = get_analytics_df()
 st.sidebar.header("Filters")
 min_date, max_date = df["date"].min(), df["date"].max()
 start, end = st.sidebar.date_input("Date range", value=(min_date, max_date))
-state = st.sidebar.multiselect("State", sorted(df["provider_state"].dropna().unique()), default=[])
+states = st.sidebar.multiselect("State(s)", sorted(df["provider_state"].dropna().unique()), default=[])
 providers = st.sidebar.multiselect("Provider(s)", sorted(df["provider_id"].unique()), default=[])
 
 # ---- Apply filters to dataframe
-f = filter_df(df=df, start=start, end=end, state=state, providers=providers)
+f = filter_df(df=df, start=start, end=end, states=states, providers=providers)
 
 
 # AGG FOR TIME-RELATED PLOTS at daily level (across all providers)
