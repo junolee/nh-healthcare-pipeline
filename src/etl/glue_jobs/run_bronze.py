@@ -12,7 +12,7 @@ args = getResolvedOptions(sys.argv, params)
 job_name = args.get("JOB_NAME")
 pipeline_mode = args.get("PIPELINE_MODE")
 start_date = args.get("START_DATE")
-sample = args.get("SAMPLE")
+sample = True if args["SAMPLE"].lower() == "true" else False
 
 
 sc = SparkContext()

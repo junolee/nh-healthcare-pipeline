@@ -9,7 +9,10 @@ import pyspark.sql.functions as F
 def load_raw_input(spark, path, start_date, sample):
   df = load_csv(spark, path).filter(F.col("ingest_date") >= start_date) 
   if sample:
+      info("Sampling rows")
       df = df.sample(0.05)
+  else:
+      info("Not sampling rows")
   info(f"Reading from path: {path}\n{df.count()} new records after start_date: {start_date}")
   return df
 
