@@ -3,7 +3,7 @@ import pyspark.sql.functions as F
 from pyspark.sql import Window
 
 # ============================================================================
-# CONFIG CLASS + load_config() function (from jobs.common.config)
+# CONFIG CLASS 
 # ============================================================================
 
 @dataclass
@@ -69,7 +69,7 @@ def load_config(job_name):
 
 
 # ============================================================================
-# LOGGING UTILITIES (from jobs.common.logging_utils)
+# LOGGING UTILITIES 
 # ============================================================================
 
 def info(msg):
@@ -136,7 +136,7 @@ def overwrite_partitions(spark, df, table, partition_col):
 
 
 # ============================================================================
-# TRANSFORM UTILITIES (from jobs.common.transforms)
+# TRANSFORM UTILITIES 
 # ============================================================================-
 
 def dedupe(inputDF, partitionBy):

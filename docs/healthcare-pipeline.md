@@ -71,3 +71,28 @@ Dashboard: https://nh-healthcare.streamlit.app
 
 ![](nh-dashboard-bottom.png)
 
+## Project Files
+```
+├── dashboard
+│   ├── app.py
+├── ingest
+│   ├── gdrive_to_s3.py
+│   ├── lambda_function.py
+│   ├── local_run.py
+├── jobs
+│   ├── config.py
+│   ├── main_bronze.py
+│   ├── main_silver.py
+│   ├── run_bronze.py
+│   └── run_silver.py
+└── setup
+    ├── create_gold_ctas.py
+    ├── create_tables_athena.py
+    ├── queries.py
+    └── schemas.py
+```
+- `setup/create_tables_athena.py` generates DDL to run in Athena that creates schemas and external parquet tables in Glue Data Catalog 
+- `ingest/*` defines the lambda function `gdrive_to_s3` that incrementally ingests from Google Drive to `/raw` directory in S3
+- `jobs/*` defines the glue pyspark jobs to build the bronze, silver, gold layers of this pipeline
+- `dashboard/app.py` builds the streamlit dashboard
+
