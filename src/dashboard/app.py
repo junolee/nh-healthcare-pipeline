@@ -6,120 +6,130 @@ import plotly.express as px
 st.set_page_config(layout="wide", page_title="NH Healthcare Dashboard")
 
 @st.cache_data
-def load_table(table, database="nh_silver"):
+def load_table(table, database="nh_gold"):
   df = wr.s3.read_parquet_table(database=database, table=table)
   return df
 
 @st.cache_data
-def get_analytics_df():
-  dates = load_table("dim_dates")[["date","day_of_week","day_of_week_name","is_weekday"]]
-  staff = load_table("fct_staffing_levels")[["provider_id","work_date","num_patients","hrs_registered_nurses"]]
-  prov = load_table("dim_providers")[["provider_id","provider_name","provider_state","ownership_type","num_certified_beds", "substantiated_complaints", "rn_turnover", "qm_rating"]].sample(400)
-  claim = load_table("dim_claims")[['provider_id', 'measure_code','measure_description','observed_score']]
-  claim = claim[claim['measure_code'] == 521]  #  % short-stay residents rehospitalized after a NH admission)
-  claim['readmission_rate'] = claim['observed_score']  
-  claim = claim[['provider_id', 'readmission_rate']]
-  df = (staff
-        .merge(prov, on="provider_id")
-        .merge(claim, on="provider_id")
-        .merge(dates, left_on="work_date", right_on="date")
-        .drop(columns=["work_date"])
-  )
-  df["date"] = pd.to_datetime(df["date"], errors="coerce").dt.date
-  df = df.dropna(subset=["date", "provider_id"])
-  df["occupancy_rate"] = df["num_patients"] / df["num_certified_beds"]
-  df["hrs_per_res"] = df["hrs_registered_nurses"] / df["num_patients"]
-  return df
-
-@st.cache_data
-def filter_df(df, start, end, states=None, providers=None):
-  df = df[(df["date"] >= start) & (df["date"] <= end)]
-  if states: df = df[df["provider_state"].isin(state)]
+def filter_df(df, start=None, end=None, weekdays_only=None, states=None, providers=None):
+  if start: df = df[(df["date"] >= start) & (df["date"] <= end)]
+  if weekdays_only: df = df[df["is_weekday"] == True]
+  if states: df = df[df["state"].isin(states)]
   if providers: df = df[df["provider_id"].isin(providers)]
   return df
 
+# ---- Load data
+agg_daily = load_table("agg_daily_metrics")
+agg_prov = load_table("agg_provider_metrics")
+agg_state = load_table("agg_state_metrics")
 
-# ---- Load dataframe
-df = get_analytics_df()
+
 
 # ---- Sidebar filters
 st.sidebar.header("Filters")
-min_date, max_date = df["date"].min(), df["date"].max()
+
+min_date, max_date = agg_daily["date"].min(), agg_daily["date"].max()
 start, end = st.sidebar.date_input("Date range", value=(min_date, max_date))
-states = st.sidebar.multiselect("State(s)", sorted(df["provider_state"].dropna().unique()), default=[])
-providers = st.sidebar.multiselect("Provider(s)", sorted(df["provider_id"].unique()), default=[])
+states = st.sidebar.multiselect("State(s)", sorted(agg_state["state"].dropna().unique()), default=[])
+providers = st.sidebar.multiselect("Provider(s)", sorted(agg_prov["provider_id"].unique()), default=[])
+weekdays_only = st.sidebar.toggle("Weekdays only", value=False)
 
 # ---- Apply filters to dataframe
-f = filter_df(df=df, start=start, end=end, states=states, providers=providers)
+
+daily = filter_df(df=agg_daily, start=start, end=end, weekdays_only=weekdays_only)
+prov_agg = filter_df(df=agg_prov, states=states, providers=providers)
+state_agg = filter_df(df=agg_state, states=states)
 
 
-# AGG FOR TIME-RELATED PLOTS at daily level (across all providers)
-daily = (f.groupby(["date", "day_of_week", "day_of_week_name", "is_weekday"], as_index=False)
-         .agg(num_patients=("num_patients","sum"),
-              occupancy_rate=("occupancy_rate","mean"),
-              rn_hours=("hrs_registered_nurses","sum")
-          ))
-daily["hrs_per_res"] = daily["rn_hours"] / daily["num_patients"]
-daily["occ_7d"] = daily["occupancy_rate"].rolling(7).mean()
-daily["hpr_7d"] = daily["hrs_per_res"].rolling(7).mean()
+
+def create_kpi_row(*kpi_pairs, divider=True):
+    "Creates a row of KPIs based on (kpi name, kpi value) pairs (kpi value can be string or number)"
+    sections = st.columns(len(kpi_pairs))
+    for s, (label, value) in zip(sections, kpi_pairs):
+        s.metric(label, value)
+    if divider: st.divider()
 
 # ---- KPIs (based on agg daily metrics across all providers)
-c1, c2, c3, c4 = st.columns(4)
-c1.metric("Total Residents",              f"{int(daily['num_patients'].sum()):,}")
-c2.metric("Total Staffing Hours (RN)",               f"{float(daily['rn_hours'].sum()):,.1f}")
-c3.metric("Hours Per Resident", f"{float(daily['hrs_per_res'].mean()):.3f}")
-c4.metric("Occupancy Rate",   f"{float(daily['occupancy_rate'].mean()):.3f}")
-
-st.divider()
-
-# ---- Charts
+create_kpi_row(
+    ("Total Residents",           f"{int(daily['num_patients'].sum()):,}"),
+    ("Total Staffing Hours (RN)", f"{float(daily['rn_hours'].sum()):,.1f}"),
+    ("Hours Per Resident",        f"{float(daily['hrs_per_res'].mean()):.3f}"),
+    ("Occupancy Rate",            f"{float(daily['occupancy_rate'].mean()):.3f}")
+)
 
 
-left, right = st.columns(2)
-# (Multi-line chart) avg occupancy rate over time (daily line + 7d rolling line)
-with left:
-    metric_name_1 = st.selectbox("Metric over time", ["Occupancy Rate", "RN Hrs Per Resident"])
-    if metric_name_1 == "RN Hrs Per Resident": 
-      daily_metric_1 = "hrs_per_res"
-      roll7 = "hpr_7d"
-    else: 
-      daily_metric_1 = "occupancy_rate"
-      roll7 = "occ_7d"
-
-    fig = px.line(daily, x="date", y=daily_metric_1, title=f"{metric_name_1} over time")
-    fig.add_scatter(x=daily["date"], y=daily[roll7], name="7d rolling", mode="lines")
-    st.plotly_chart(fig, use_container_width=True)
-# (Multi-box chart) hrs per resident (registered nurses) by day of week
-with right:
-    metric_name_2 = st.selectbox("Metric", ["RN Hrs Per Resident", "Occupancy Rate"])
-    if metric_name_2 == "RN Hrs Per Resident": daily_metric_2 = "hrs_per_res"
-    else: daily_metric_2 = "occupancy_rate"    
-    fig = px.box(daily, x="day_of_week_name", y=daily_metric_2, title=f"{metric_name_2} by day of week")
-    st.plotly_chart(fig, use_container_width=True)
+# ----------------
+# CHARTS
+# ----------------
 
 
+def scale_range(vals, pad=0.2):
+  min = vals.min() # use numpy in case of multiple cols
+  max = vals.max()
+  pad = (max - min) * 0.2
+  return min - pad, max + pad
 
-# AGG FOR SCATTER PLOTS at provider-level (less noisy than provider-day level)
-prov_agg = (f.groupby(["provider_id", "provider_state"], as_index=False)
-            .agg(avg_num_patients=("num_patients","mean"),
-                  total_rn_hours=("hrs_registered_nurses","sum"),
-                  avg_hrs_per_res=("hrs_per_res","mean"),
-                  avg_occupancy_rate=("occupancy_rate","mean"),
-                  qm_rating=("qm_rating","mean"),num_complaints=("substantiated_complaints","mean"),nurse_attrition_rate=("rn_turnover","mean")))
 
-col1, col2, col3 = st.columns(3)
-# (Scatter plot) avg hrs per resident vs. nurse attrition rate
-with col1:
+def create_row(fn_list):
+  length = len(fn_list)
+  for c, fn in zip(st.columns(length), fn_list):
+    with c:
+      fn()
+
+
+def select_metric_line_plot():
+  LINE_X_COLUMN = "date"
+  LINE_Y_COLUMNS = {
+    "Occupancy Rate":        ["occupancy_rate", "occ_7d"],
+    "RN Hrs Per Resident":   ["hrs_per_res", "hpr_7d"]}
+  
+  line_metric = st.selectbox("Metric over time", LINE_Y_COLUMNS.keys())
+  line_ycols = LINE_Y_COLUMNS[line_metric]
+
+  fig = px.line(daily, x=LINE_X_COLUMN, y=line_ycols, title=f"{line_metric} over time")
+  min, max = scale_range(daily[line_ycols[0]])
+  fig.update_yaxes(range=[min, max])
+  st.plotly_chart(fig, use_container_width=True)
+
+
+def select_metric_box_plot():
+  BOX_X_COLUMN = "day_of_week_name"
+  BOX_Y_COLUMNS = {
+    "RN Hrs Per Resident":   "hrs_per_res",
+    "Occupancy Rate":        "occupancy_rate"}
+  
+  box_metric = st.selectbox("Metric", BOX_Y_COLUMNS.keys())
+  box_ycol = BOX_Y_COLUMNS[box_metric]
+  
+  fig = px.box(daily, x=BOX_X_COLUMN, y=box_ycol, title=f"{box_metric} by day of week")
+  st.plotly_chart(fig, use_container_width=True)
+
+
+
+
+
+
+create_row([select_metric_line_plot, select_metric_box_plot])
+
+
+
+
+
+
+# ----------------
+# AGG_PROV --> CHARTS
+# ----------------
+
+def scatter_attrition():
   fig = px.scatter(
-      prov_agg, x="avg_hrs_per_res", y="nurse_attrition_rate",
+      prov_agg, x="avg_hrs_per_res", y="rn_turnover",
       size="avg_num_patients",
       hover_data=["provider_id","avg_num_patients"],
       title="RN hours per resident vs nurse attrition rate"
   )
   st.plotly_chart(fig, use_container_width=True)
 
-# (Scatter plot) avg hrs per resident vs. num complaints
-with col2:
+def scatter_complaints():
   fig = px.scatter(
       prov_agg, x="avg_hrs_per_res", y="num_complaints",
       size="avg_num_patients",
@@ -128,8 +138,7 @@ with col2:
   )
   st.plotly_chart(fig, use_container_width=True)
 
-# (Scatter plot) avg hrs per resident vs. qm_rating
-with col3:
+def scatter_qm_rating():
   prov_agg["avg_hrs_per_res"] = prov_agg["avg_hrs_per_res"].clip(upper=1.3)
   fig = px.box(
       prov_agg, y="avg_hrs_per_res", x="qm_rating",
@@ -140,28 +149,25 @@ with col3:
   st.plotly_chart(fig, use_container_width=True)  
 
 
+create_row([scatter_attrition, scatter_complaints, scatter_qm_rating])
 
 
 
 
+# ----------------
+# AGG_PROV - CHART
+# ----------------
 bottom_left, bottom_right = st.columns(2)
 with bottom_left:
-  fig = px.bar(f, x="ownership_type", y="hrs_per_res", title="Hours per res by ownership type")
+  fig = px.bar(prov_agg, x="ownership_type", y="avg_hrs_per_res", title="Hours per res by ownership type")
   st.plotly_chart(fig, use_container_width=True)
 
-with bottom_right:    
-  state_agg = (prov_agg.groupby("provider_state", as_index=False)
-            .agg(avg_num_patients=("avg_num_patients","mean"),
-                  total_rn_hours=("total_rn_hours","sum"),
-                  avg_hrs_per_res=("avg_hrs_per_res","mean"),
-                  avg_occupancy_rate=("avg_occupancy_rate","mean"))
-            .sort_values("avg_hrs_per_res", ascending=True)
-                  )
+# ----------------
+# AGG_STATE - CHART
+# ----------------
 
-
-  
-  
-  fig = px.bar(state_agg, x="provider_state", y="avg_hrs_per_res", title="Avg hours per res by state")
+with bottom_right:      
+  fig = px.bar(state_agg, x="state", y="avg_hrs_per_res", title="Avg hours per res by state")
   st.plotly_chart(fig, use_container_width=True)
 
 
