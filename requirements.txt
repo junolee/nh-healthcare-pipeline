@@ -8,3 +8,9 @@ google-auth-oauthlib
 
 # jobs
 pyspark==3.5
+
+# dashboard
+awswrangler
+streamlit
+pandas
+plotly
