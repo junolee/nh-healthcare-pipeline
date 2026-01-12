@@ -77,7 +77,7 @@ Specify named profile, glue workspace directory, script name, additional python 
 ### BRONZE JOB
 ```bash
 export PROFILE_NAME=my-glue-profile
-export WORKSPACE_LOCATION=/Users/juno/dev/dea/nh-healthcare-pipeline/src/etl/glue_jobs
+export WORKSPACE_LOCATION=/local/path/to/repo/jobs
 
 export SCRIPT_FILE_NAME=run_bronze.py
 export EXTRA_PY_FILES=/home/hadoop/workspace/config.py,/home/hadoop/workspace/main_bronze.py
@@ -91,7 +91,7 @@ docker run -it --rm -v ~/.aws:/home/hadoop/.aws -v $WORKSPACE_LOCATION:/home/had
 ### SILVER JOB
 ```bash
 export PROFILE_NAME=my-glue-profile
-export WORKSPACE_LOCATION=/Users/juno/dev/dea/nh-healthcare-pipeline/src/etl/glue_jobs
+export WORKSPACE_LOCATION=/local/path/to/repo/jobs
 
 export SCRIPT_FILE_NAME=run_silver.py
 export EXTRA_PY_FILES=/home/hadoop/workspace/config.py,/home/hadoop/workspace/main_silver.py

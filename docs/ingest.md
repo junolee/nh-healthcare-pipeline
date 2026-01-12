@@ -33,7 +33,7 @@ mkdir lambda_package
 cd lambda_package
 
 # 2. Install dependencies directly into this directory
-pip install -t . -r ../requirements.txt -q
+pip install -t . -r ../requirements-lambda.txt -q
 
 # 3. Copy your specific code files into this directory
 cp ../gdrive_to_s3.py .
@@ -60,3 +60,5 @@ aws lambda update-function-code --function-name gdrive_to_s3 --zip-file fileb://
 # 8. Cleanup
 rm -rf lambda_package function.zip
 ```
+
+
