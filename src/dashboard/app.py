@@ -2,6 +2,7 @@ import streamlit as st
 import awswrangler as wr
 import pandas as pd
 import plotly.express as px
+import os
 
 st.set_page_config(layout="wide", page_title="NH Healthcare Dashboard")
 
@@ -9,30 +10,36 @@ st.set_page_config(layout="wide", page_title="NH Healthcare Dashboard")
 # Data helpers
 # -------------------------
 
-@st.cache_data
-def load_table(table, database="nh_gold"):
-  df = wr.s3.read_parquet_table(database=database, table=table)
-  return df
+wr.config.workgroup = "personal-dev"
 
 @st.cache_data
-def filter_df(df, start=None, end=None, weekdays_only=None, states=None, providers=None):
-  if start: df = df[(df["date"] >= start) & (df["date"] <= end)]
-  if weekdays_only: df = df[df["is_weekday"] == True]
-  if states: df = df[df["state"].isin(states)]
-  if providers: df = df[df["provider_id"].isin(providers)]
-  return df
+def query_athena(sql, database="nh_gold"):
+    return wr.athena.read_sql_query(sql=sql, database=database)
 
-def get_filter_values():  # extract values to build filters
-  agg_daily = load_table("agg_daily_metrics")
-  agg_prov = load_table("agg_provider_metrics")
-  agg_state = load_table("agg_state_metrics")
+@st.cache_data
+def get_filter_values():
+    dates = query_athena("""
+        SELECT MIN(date) AS min_date, MAX(date) AS max_date
+        FROM nh_gold.agg_daily_metrics
+    """)
+    min_date = dates.loc[0, "min_date"]
+    max_date = dates.loc[0, "max_date"]
+    
+    states_list = query_athena("""
+        SELECT DISTINCT state
+        FROM nh_gold.agg_state_metrics
+        WHERE state IS NOT NULL
+        ORDER BY state
+    """)["state"].tolist()
+    
+    providers_list = query_athena("""
+        SELECT DISTINCT provider_id
+        FROM nh_gold.agg_provider_metrics
+        WHERE provider_id IS NOT NULL
+        ORDER BY provider_id
+    """)["provider_id"].tolist()
 
-  min_date = agg_daily["date"].min()
-  max_date = agg_daily["date"].max()
-  states_list = agg_state["state"].dropna().unique()
-  providers_list = agg_prov["provider_id"].unique()
-
-  return min_date, max_date, states_list, providers_list
+    return min_date, max_date, states_list, providers_list
 
 # -------------------------
 # UI helpers
@@ -50,7 +57,6 @@ def row(*fn_list):
   for c, fn in zip(st.columns(length), fn_list):
     with c:
       fn()
-
 
 def padded_range(vals, pad=0.2):
   min = vals.min() # use numpy in case of multiple cols
@@ -73,22 +79,116 @@ providers = st.sidebar.multiselect("Providers", sorted(providers_list), default=
 # -------------------------
 # Load filtered data
 # -------------------------
+def build_where(start=None, end=None, weekdays_only=False, states=None, providers=None):
+    parts = []
+    if start and end: parts.append(f"date BETWEEN DATE '{start.isoformat()}' AND DATE '{end.isoformat()}'")
+    if weekdays_only: parts.append("is_weekday = true")
+    if states:        
+      states_sql = ", ".join(f"'{s}'" for s in states)
+      parts.append(f"state IN ({states_sql})")
+    if providers:     
+      providers_sql = ", ".join(f"'{p}'" for p in providers)
+      parts.append(f"provider_id IN ({providers_sql})")
+    return ("WHERE " + " AND ".join(parts)) if parts else ""  
 
-daily = filter_df(load_table("agg_daily_metrics"), start=start, end=end, weekdays_only=weekdays_only)
-prov_agg = filter_df(load_table("agg_provider_metrics"), states=states, providers=providers)
-state_agg = filter_df(load_table("agg_state_metrics"), states=states)
+def load_agg_daily():
+  where = build_where(start=start, end=end, weekdays_only=weekdays_only, states=states, providers=providers)
+  agg_daily_sql = f"""
+WITH daily AS (
+  SELECT
+    date,
+    day_of_week,
+    day_of_week_name,
+    is_weekday,
+    SUM(num_patients)                             AS num_patients,
+    AVG(occupancy_rate)                           AS occupancy_rate,
+    SUM(rn_hrs)                                   AS rn_hours,
+    (SUM(rn_hrs) / NULLIF(SUM(num_patients), 0))  AS hrs_per_res
+  FROM daily_provider_metrics
+  {where}
+  GROUP BY 1,2,3,4
+)
+SELECT
+  *,
+  AVG(occupancy_rate) OVER (
+    ORDER BY date
+    ROWS BETWEEN 6 PRECEDING AND CURRENT ROW
+  ) AS occ_7d,
+  AVG(hrs_per_res) OVER (
+    ORDER BY date
+    ROWS BETWEEN 6 PRECEDING AND CURRENT ROW
+  ) AS hpr_7d
+FROM daily
+ORDER BY date
+  """
+  # st.write(agg_daily_sql)
+  return query_athena(agg_daily_sql)
+  
+def load_agg_prov():
+  where = build_where(start=start, end=end, weekdays_only=weekdays_only, states=states, providers=providers)
+  agg_prov_sql = f"""
+WITH base AS (
+  SELECT * FROM daily_provider_metrics
+  {where}
+)
+SELECT
+  provider_id,
+  provider_name,
+  state,
+  ownership_type,
+
+  AVG(num_patients)           AS avg_num_patients,
+  SUM(rn_hrs)                 AS total_rn_hours,
+  AVG(hrs_per_res)            AS avg_hrs_per_res,
+  AVG(occupancy_rate)         AS avg_occupancy_rate,
+
+  MAX(num_beds)               AS num_beds,
+  MAX(readmission_rate)       AS readmission_rate,
+  MAX(num_complaints)         AS num_complaints,
+  MAX(rn_turnover)            AS rn_turnover,
+  MAX(qm_rating)              AS qm_rating
+FROM base
+GROUP BY 1, 2, 3, 4
+"""
+  # st.write(agg_prov_sql)
+  return query_athena(agg_prov_sql)
+
+def load_state_prov():
+  where = build_where(start=start, end=end, weekdays_only=weekdays_only, states=states, providers=providers)
+  agg_state_sql = f"""
+WITH base AS (
+  SELECT * FROM daily_provider_metrics
+  {where}
+)
+SELECT
+  state,
+  AVG(num_patients)           AS avg_num_patients,
+  SUM(rn_hrs)                 AS total_rn_hours,
+  SUM(num_beds)               AS total_beds,
+  AVG(hrs_per_res)            AS avg_hrs_per_res,
+  AVG(occupancy_rate)         AS avg_occupancy_rate,
+  AVG(qm_rating)              AS qm_rating,
+  AVG(num_complaints)         AS num_complaints,
+  AVG(rn_turnover)            AS rn_turnover
+FROM base
+GROUP BY 1
+  """
+  # st.write(agg_state_sql)
+  return query_athena(agg_state_sql)    
+
+daily = load_agg_daily()
+prov_agg = load_agg_prov()
+state_agg = load_state_prov()
 
 # -------------------------
 # KPIs (daily metrics agg across providers)
 # -------------------------
-
 kpi_row(
     ("Total Residents",           f"{int(daily['num_patients'].sum()):,}"),
     ("Total Staffing Hours (RN)", f"{float(daily['rn_hours'].sum()):,.1f}"),
     ("Hours Per Resident",        f"{float(daily['hrs_per_res'].mean()):.3f}"),
     ("Occupancy Rate",            f"{float(daily['occupancy_rate'].mean()):.3f}")
 )
-
 # -------------------------
 # Charts: daily trends
 # -------------------------
@@ -160,11 +260,7 @@ def scatter_attrition():
   )
   st.plotly_chart(fig, use_container_width=True)
 
-
 row(scatter_complaints, box_qm_rating, scatter_readmission, scatter_attrition)
-
-
-
 
 # ----------------
 # Chart: agg bar charts (hpr by ownership type, state)
@@ -183,7 +279,9 @@ def state_bar_hpr():
 
 row(ownership_bar_hpr, state_bar_hpr)
   
-
+# ----------------
+# Chart: top providers ranked by metric
+# ----------------  
 
 def top_hbar(df, metric, by, n=5, title_metric=None, title_by=None, largest=True, hover_data=None, omit_zero=True):
   df = df.copy()
