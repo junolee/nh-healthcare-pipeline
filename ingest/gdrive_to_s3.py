@@ -1,220 +1,126 @@
 """
-Main logic for incremental ingestion from Google Drive to S3 "raw" landing zone; Called by lambda_function.py
+Incremental ingestion from Google Drive to an S3 "raw" landing zone
 
-- Must specify a run mode when calling main():
-  - Full refresh: loads all CSV files in source Google Drive folder
-  - Incremental: loads only changed CSV files since last run (tracked via Google Drive Changes API's startPageToken)
-- Both modes above generate a new startPageToken to use in a future incremental update, unless persist_state is set to False.
+Called by: lambda_function.py
+
+Run modes - set via main():
+- Full refresh: ingest all CSV files in the source Google Drive folder
+- Incremental: ingest only CSV files that changed since the last run, based on the Google Drive Changes API checkpoint (startPageToken)
+
+State:
+- Each run produces a new startPageToken for the next incremental run
+- If persist_state=True, the new token is saved to S3 at start_token_path
 """
 
-import io
-import os
 import datetime
-import boto3
-import json
 from pathlib import Path
-from google.auth.transport.requests import Request
-from google.oauth2.credentials import Credentials
-from googleapiclient.discovery import build
-from googleapiclient.http import MediaIoBaseDownload
-from config import load_config
+from config import *
 
 
-def _load_secret(secret_name) -> dict:
-  secrets = boto3.client('secretsmanager')
-  secret_str = secrets.get_secret_value(SecretId=secret_name)['SecretString']
-  return json.loads(secret_str)
+def get_relevant_changed_file(change_record, folder_id):
+  """
+  Return file metadata if it is relevant; otherwise return None.
+
+  Change record is relevant only if:
+  - change type is file (not drive/permission/etc)
+  - file was not removed
+  - file is a CSV
+  - file is located in the specified folder
+  """
+  if change_record["removed"] or change_record["changeType"] != "file": 
+    return None
   
-
-def _save_secret_str(secret_name, data: str):
-  secrets = boto3.client('secretsmanager')
-  secrets.put_secret_value(SecretId=secret_name, SecretString=data)  # stored as JSON string
-
-
-def get_drive_client():
-  c = load_config()
-  SECRET_NAME = c.oauth_secret_name
-  token = _load_secret(SECRET_NAME)
-
-  creds = Credentials.from_authorized_user_info(token)
-
-  if creds.expired and creds.refresh_token: 
-    creds.refresh(Request())
-    print("Refreshed token")
-
-    _save_secret_str(SECRET_NAME, creds.to_json())
-    print("Updated secret with refreshed token")
-
-  else:
-    print("Using token loaded from secret")
-    
-  drive = build('drive', 'v3', credentials=creds)
-  print("Created drive service")
-  return drive
-
-def _list_files(drive, parent_folder, page_size=None, page_token=None, fields=None):
-  results = drive.files().list(
-      q=f"'{parent_folder}' in parents",   
-      fields=fields if fields else "nextPageToken,files(id,name,mimeType,parents)",
-      pageSize=page_size,
-      includeItemsFromAllDrives=True,
-      supportsAllDrives=True,
-      pageToken=page_token
-    ).execute()
+  file = change_record["file"]
   
-  files = results.get('files')
-  next_page = results.get("nextPageToken")
+  if folder_id not in file["parents"]:
+    return None
 
-  return files, next_page
+  if file['mimeType'] != "text/csv": 
+    return None
 
-def _create_start_page_token(drive, DRIVE_ID):
-  results = drive.changes().getStartPageToken(
-    driveId=DRIVE_ID,
-    supportsAllDrives=True
-  ).execute()
-  return results.get("startPageToken")
-
-def _list_changes(drive, DRIVE_ID, page_token, page_size=None, fields=None):
-  results = drive.changes().list(
-    pageToken=page_token,
-    pageSize=page_size,
-    driveId=DRIVE_ID,
-    supportsAllDrives=True,
-    includeItemsFromAllDrives=True,
-    fields=fields if fields else "changes(changeType,time,removed,fileId,file(id,name,mimeType,parents)),newStartPageToken,nextPageToken"
-  ).execute()
-
-  changes = results.get('changes')
-  next_page = results.get("nextPageToken")
-  new_start_page = results.get("newStartPageToken")
-  
-  return changes, next_page, new_start_page
-
-def _get_file_metadata(drive, file_id, fields=None):
-  results = drive.files().get(
-    fileId=file_id,
-    supportsAllDrives=True,
-    fields=fields if fields else "id,name,mimeType,modifiedTime,trashed,md5Checksum,size"
-  ).execute()
-  return results
-
-
-def _get_file_content_buffer(drive, file_id):
-  buffer = io.BytesIO()
-  request = drive.files().get_media(fileId=file_id, supportsAllDrives=True)
-  downloader = MediaIoBaseDownload(fd=buffer, request=request)
-  done = False
-  while not done: 
-    status, done = downloader.next_chunk()
-    if status: print(f"Download {int(status.progress() * 100)}%")
-  buffer.seek(0)
-  return buffer
-
-
-def _relevant_updated_file(change, FOLDER_ID):
-  """Returns the changed file object if relevant, returns None if not."""
-  if change["removed"] or change["changeType"] != "file": return False
-  file = change["file"]
-  if FOLDER_ID not in file["parents"] or file['mimeType'] != "text/csv": return False
   return file
 
-def _fetch_changed_files(drive, DRIVE_ID, FOLDER_ID, start_token):  # get all change events (paginate)
+
+def fetch_changed_files(drive, drive_id, folder_id, start_token):  # get all change events (paginate)
   """
-  Returns list of relevant updated file_ids + new start token
-  - makes API calls to drive.changes().list(), paginates for complete results
-  - filters account-wide drive change stream for relevant updates to files in source directory
-  - returns new start page token to track incremental updates with changes API
+  Fetch changed file IDs since start_token, and return (file_ids, new_start_token)
+
+  - Paginates through the Drive Changes stream using list_changes()
+  - Filters account-wide changes down to CSV files in the specified source folder
   """
   
-  all_changes, next_page, new_start_token = _list_changes(drive, DRIVE_ID, start_token, 2)
+  all_changes, next_page, new_start_token = list_changes(drive, drive_id, start_token, 2)
+
   while next_page:
-    changes, next_page, new_start_token = _list_changes(drive, DRIVE_ID, next_page, 2)
+    changes, next_page, new_start_token = list_changes(drive, drive_id, next_page, 2)
     all_changes += changes
 
-  # filter changes for relevant files for this project
-  relevant_changed_file_ids = []
-  for c in all_changes:
-    file = _relevant_updated_file(c, FOLDER_ID)
+  file_ids = []
+  for change in all_changes:
+    file = get_relevant_changed_file(change, folder_id)
     if file:
-      relevant_changed_file_ids.append(file.get('id'))
+      file_ids.append(file.get('id'))
       print(f"Detected changed file: {file.get('name')}")
   
-  return relevant_changed_file_ids, new_start_token
+  return file_ids, new_start_token
 
 
-def _fetch_all_files(drive, DRIVE_ID, FOLDER_ID):
+def fetch_all_files(drive, drive_id, folder_id):
   """
-  Returns list of file_ids for all files in source drive folder + new start token
-  - makes API calls to drive.files().list(), paginates for complete results
-  - filters results for files only (excludes folders)
-  - returns new start page token for subsequent incremental updates with changes API
+  Fetch all file IDs in the source folder, and return (file_ids, new_start_token)
+
+  - Paginates through files in specified Drive folder using list_files()
+  - Creates a new startPageToken for future incremental runs
   """  
-  all_files, next = _list_files(drive, FOLDER_ID, 2)
+  all_files, next_page = list_files(drive, folder_id, 2)
   
-  while next:
-    files, next = _list_files(drive, FOLDER_ID, 2, next)
+  while next_page:
+    files, next_page = list_files(drive, folder_id, 2, next_page)
     all_files += files  
   
-  start_token = _create_start_page_token(drive, DRIVE_ID)
-  # filter for files only; not folders
-  file_ids = []
-  for file in all_files:
-    if file['mimeType'] == "text/csv":
-      file_ids.append(file["id"])
+  new_start_token = create_start_page_token(drive, drive_id)
+  
+  file_ids = [file["id"] for file in all_files if file['mimeType'] == "text/csv"]
+  print(f"Fetched {len(file_ids)} files from Google Drive folder ID: {folder_id}.")
 
-  return file_ids, start_token
+  return file_ids, new_start_token
 
 
-def ingest_files(drive, s3, file_ids, BUCKET_NAME):
+def ingest_files(drive, s3, file_ids, bucket_name):
   """
-  Loads each gdrive file in file_ids to s3
-  Uses current date to build S3 target path
+  Download each Google Drive file in file_ids and upload it to S3.
+
+  - Uses current date to build S3 target path with ingest_date partition.
   """
   ingest_date = datetime.datetime.now().strftime("%Y-%m-%d")  # use ingest_date to build filepath
 
-  print(f"Loading files to S3: {BUCKET_NAME}/raw/<dataset>/ingest-date={ingest_date}/<dataset>.csv")
+  print(f"Loading files to S3: {bucket_name}/raw/<dataset>/ingest_date={ingest_date}/<dataset>.csv")
 
   for file_id in file_ids:
-    filename = _get_file_metadata(drive, file_id)["name"]
+    filename = get_file_metadata(drive, file_id)["name"]
     dataset_name = Path(filename).stem
     path = f"raw/{dataset_name}.csv/ingest_date={ingest_date}/{dataset_name}.csv"
     
-    # load drive file to s3
     print(f"Starting file transfer for: {filename}")
-    buffer = _get_file_content_buffer(drive, file_id)
-    s3.upload_fileobj(buffer, Key=path, Bucket=BUCKET_NAME)
+    buffer = get_file_content_buffer(drive, file_id)
+    s3.upload_fileobj(buffer, Bucket=bucket_name, Key=path)
     print(f"Uploaded {filename} to S3.\n")
+
   print("Ingested all files.")
-  return
 
 
-def _load_start_token(s3, bucket_name, path):
-
-  response = s3.get_object(Bucket=bucket_name, Key=path)
-  start_token = json.loads(response['Body'].read().decode('utf-8')).get('startPageToken')
-  
-  print(f"Loaded start token: {start_token} from s3://{bucket_name}/{path}")
-
-  return start_token
-
-def _save_start_page_token(s3, bucket_name, path, new_start_token):
-
-  data = json.dumps({"startPageToken": new_start_token})
-  s3.put_object(Body=data, Bucket=bucket_name, Key=path)
-  
-  print(f"Saved start token: {new_start_token} to s3://{bucket_name}/{path}")
-
-  
 def main(full_refresh=False, persist_state=False):
   """
-  full_refresh (bool): run ingestion in Full Refresh mode (if False, runs in Incremental mode)
-  persist_state (bool): save updated startPageToken to S3 (see START_TOKEN_PATH below) to use in a future incremental update
+    Run ingestion in either Full Refresh or Incremental mode.
 
-  Requires environment variables:
-  - DRIVE_ID & FOLDER_ID: Drive ID + Folder ID of the source Google Drive folder containing CSV files
-  - OAUTH_SECRET_NAME: AWS Secrets Manager secret name containing OAuth token for Google Drive API
-  - START_TOKEN_PATH: S3 key for startPageToken checkpoint JSON (e.g. state/google-drive/startPageToken.json)
-  - BUCKET_NAME: S3 bucket containing the raw landing zone & start token path
+    Args:
+      full_refresh: If True, ingest all CSVs in the configured Google Drive folder. If False, ingest only changed CSVs.
+      persist_state: If True, save the new startPageToken (checkpoint used in Google Drive Changes API) to S3.
+
+    Requires config (loaded via load_config()):
+    - drive_id, folder_id: Google Drive + folder containing the source CSV files
+    - bucket_name: S3 bucket for raw landing zone + state (see start_token_path below)
+    - start_token_path: S3 path to JSON file storing startPageToken
   """
   print(f"main received args for persist_state: {persist_state}")
   
@@ -222,33 +128,26 @@ def main(full_refresh=False, persist_state=False):
   print(f"Running ingest script in mode: {mode}")
 
   c = load_config()
-
-  DRIVE_ID = c.drive_id
-  FOLDER_ID = c.folder_id
-  BUCKET_NAME = c.bucket_name
-  START_TOKEN_PATH = c.start_token_path
-
-  s3 = boto3.client('s3')
+  s3 = get_s3_client()
   drive = get_drive_client()
 
   if full_refresh:
     print(f"Fetching all files in full refresh mode")
-    file_ids, new_start_token = _fetch_all_files(drive, DRIVE_ID, FOLDER_ID)
+    file_ids, new_start_token = fetch_all_files(drive, c.drive_id, c.folder_id)
   
   else:
-    start_token = _load_start_token(s3, BUCKET_NAME, START_TOKEN_PATH)
+    start_token = load_start_token(s3, c.bucket_name, c.start_token_path)
     print(f"Fetching all files in incremental mode based on start token: {start_token}")
-    file_ids, new_start_token = _fetch_changed_files(drive, DRIVE_ID, FOLDER_ID, start_token)
+    file_ids, new_start_token = fetch_changed_files(drive, c.drive_id, c.folder_id, start_token)
 
     print(f"Found the following changed files and received new start token {new_start_token}")
     print(file_ids)
   
-  ingest_files(drive, s3, file_ids, BUCKET_NAME)
-  
+  ingest_files(drive, s3, file_ids, c.bucket_name)
 
   if persist_state:
     print("Persisting state...")
-    _save_start_page_token(s3, BUCKET_NAME, START_TOKEN_PATH, new_start_token)
+    save_start_page_token(s3, c.bucket_name, c.start_token_path, new_start_token)
     print("Updated start page token for next incremental load")
   else:
     print("Not persisting state...")

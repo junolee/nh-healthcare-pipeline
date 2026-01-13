@@ -12,5 +12,5 @@ if __name__ == "__main__":
 
   load_dotenv(override=True)
 
-  lambda_handler(event = {"full_refresh": False, "persist_state": True}, context={})
+  lambda_handler(event = {"full_refresh": False, "persist_state": False}, context={})
   
