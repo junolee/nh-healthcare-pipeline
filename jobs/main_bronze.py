@@ -28,17 +28,18 @@ def main_bronze(spark, job_name, pipeline_mode, start_date, sample):
     "claims_raw": f"{c.source_dir}/claims_quality_measures.csv"
   }
 
-  if pipeline_mode == "full": 
+  if pipeline_mode == "full":
     start_date = "1900-01-01"
+
+  elif pipeline_mode != "incremental":
+    info("Invalid pipeline mode, exiting job.")
+    return
 
   for table_name, csv_path in bronze_csv.items():
     rawDF = load_raw_input(spark, csv_path, start_date, sample)
     bronzeDF = process_raw_to_bronze(rawDF)
 
     overwrite_partitions(spark, df=bronzeDF, table=f"{c.bronze_db}.{table_name}", partition_col="ingest_date")
-
-  else:
-    info("Valid pipeline mode not specified, exiting job.")
 
   table_counts(spark, schemas=[c.bronze_fqn])
   info(f"Completed job: {c.job_name}.")
