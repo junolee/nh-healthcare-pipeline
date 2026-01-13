@@ -1,3 +1,8 @@
+"""
+Entry point for local development.
+Calls lambda_handler() from lambda_function.py.
+"""
+
 import os
 from lambda_function import lambda_handler
 from dotenv import load_dotenv, find_dotenv, set_key

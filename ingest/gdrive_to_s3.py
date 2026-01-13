@@ -1,3 +1,12 @@
+"""
+Main logic for incremental ingestion from Google Drive to S3 "raw" landing zone.
+
+- Must specify a run mode when calling main():
+  - Full refresh: loads all CSV files in source Google Drive folder
+  - Incremental: loads only changed CSV files since last run (tracked via Google Drive Changes API's startPageToken)
+- Both modes above generate a new startPageToken to use in a future incremental update, unless persist_state is set to False.
+"""
+
 import io
 import os
 import datetime
@@ -10,15 +19,15 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
 
 
-def _load_secret(secret_name) -> dict: # returns secret dict
+def _load_secret(secret_name) -> dict:
   secrets = boto3.client('secretsmanager')
   secret_str = secrets.get_secret_value(SecretId=secret_name)['SecretString']
   return json.loads(secret_str)
   
 
-def _save_secret_str(secret_name, data: str): # data will be stored as JSON string
+def _save_secret_str(secret_name, data: str):
   secrets = boto3.client('secretsmanager')
-  secrets.put_secret_value(SecretId=secret_name, SecretString=data)
+  secrets.put_secret_value(SecretId=secret_name, SecretString=data)  # stored as JSON string
 
 
 def get_drive_client():
@@ -196,8 +205,14 @@ def _save_start_page_token(s3, bucket_name, path, new_start_token):
   
 def main(full_refresh=False, persist_state=False):
   """
-  full_refresh - loads all files in source gdrive folder to s3
-  persist_state - saves start page token to track state for subsequent incremental batch loads
+  full_refresh (bool): run ingestion in Full Refresh mode (if False, runs in Incremental mode)
+  persist_state (bool): save updated startPageToken to S3 (see START_TOKEN_PATH below) to use in a future incremental update
+
+  Requires environment variables:
+  - DRIVE_ID & FOLDER_ID: Drive ID + Folder ID of the source Google Drive folder containing CSV files
+  - OAUTH_SECRET_NAME: AWS Secrets Manager secret name containing OAuth token for Google Drive API
+  - START_TOKEN_PATH: S3 key for startPageToken checkpoint JSON (e.g. state/google-drive/startPageToken.json)
+  - BUCKET_NAME: S3 bucket containing the raw landing zone & start token path
   """
   print(f"main received args for persist_state: {persist_state}")
   
@@ -208,7 +223,6 @@ def main(full_refresh=False, persist_state=False):
   FOLDER_ID = os.environ["FOLDER_ID"]
   BUCKET_NAME = os.environ["BUCKET_NAME"]
   START_TOKEN_PATH = os.environ["START_TOKEN_PATH"]
-  TEST_START_TOKEN_PATH = os.environ["TEST_START_TOKEN_PATH"]
 
   s3 = boto3.client('s3')
   drive = get_drive_client()

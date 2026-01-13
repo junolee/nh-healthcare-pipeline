@@ -1,3 +1,8 @@
+"""
+Entry point for lambda function.
+Calls main() from gdrive_to_s3.py.
+"""
+
 import json
 from gdrive_to_s3 import main
 
