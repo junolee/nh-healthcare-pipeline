@@ -1,3 +1,8 @@
+"""
+Entry point for Silver Glue ETL job.
+Calls main_silver() from main_silver.py.
+"""
+
 import sys
 from awsglue.utils import getResolvedOptions
 from pyspark.context import SparkContext

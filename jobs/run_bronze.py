@@ -1,3 +1,8 @@
+"""
+Entry point for Bronze Glue ETL job.
+Calls main_bronze() from main_bronze.py.
+"""
+
 import sys
 from awsglue.utils import getResolvedOptions
 from pyspark.context import SparkContext
