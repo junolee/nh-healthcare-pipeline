@@ -21,8 +21,8 @@ def get_relevant_changed_file(change_record, folder_id):
   """
   Return file metadata if it is relevant; otherwise return None.
 
-  Change record is relevant only if:
-  - change type is file (not drive/permission/etc)
+  Change event is relevant if:
+  - for file type (not drive/permission/etc)
   - file was not removed
   - file is a CSV
   - file is located in the specified folder
