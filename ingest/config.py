@@ -92,7 +92,7 @@ def get_s3_client():
 def load_start_token(s3, bucket_name, path):
 
   response = s3.get_object(Bucket=bucket_name, Key=path)
-  start_token = json.loads(response['Body'].read().decode('utf-8')).get('startPageToken')
+  start_token = json.loads(response['Body'].read().decode('utf-8'))['startPageToken']
   
   print(f"Loaded start token: {start_token} from s3://{bucket_name}/{path}")
   return start_token
