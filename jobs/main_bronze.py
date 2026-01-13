@@ -5,13 +5,6 @@ def load_csv(spark, csv_path):
   df = spark.read.csv(path = csv_path, header=True)
   return df
 
-def overwrite_partitions(spark, df, table, partition_col):
-  value_columns = [c for c in df.columns if c != partition_col]
-  df = df.select(*value_columns, partition_col)
-  df.write.mode("overwrite").insertInto(table, overwrite=True)
-  spark.sql(f"MSCK REPAIR TABLE {table}")
-
-
 def load_raw_input(spark, path, start_date, sample):
   df = load_csv(spark, path).filter(F.col("ingest_date") >= start_date) 
   if sample:
@@ -26,6 +19,12 @@ def process_raw_to_bronze(df):
   return (
     df.withColumn("loaded_at", F.current_timestamp())
     )  
+
+def overwrite_partitions(spark, df, table, partition_col):
+  value_columns = [c for c in df.columns if c != partition_col]
+  df = df.select(*value_columns, partition_col)
+  df.write.mode("overwrite").insertInto(table, overwrite=True)
+  spark.sql(f"MSCK REPAIR TABLE {table}")
 
 def main_bronze(spark, job_name, pipeline_mode, start_date, sample):
 

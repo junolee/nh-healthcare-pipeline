@@ -1,14 +1,5 @@
 from config import *
 
-def overwrite_table(df, table):
-  df.write.mode("overwrite").insertInto(table, overwrite=True)
-
-def overwrite_partitions(spark, df, table, partition_col):
-  value_columns = [c for c in df.columns if c != partition_col]
-  df = df.select(*value_columns, partition_col)
-  df.write.mode("overwrite").insertInto(table, overwrite=True)
-  spark.sql(f"MSCK REPAIR TABLE {table}")
-
 def load_bronze_table(spark, table, start_date):
   df = spark.table(table)
   df = df.filter(F.col("ingest_date") >= start_date) 
@@ -40,7 +31,7 @@ def clean_claims(inputDF):
   normalizedDF = inputDF.select(*exprs)
   cleanDF = dedupe(normalizedDF, ["provider_id", "measure_code"])
 
-  return cleanDF
+  return cleanDF.withColumn("updated_at", F.current_timestamp())
 
 
 def clean_providers(inputDF):
@@ -48,16 +39,16 @@ def clean_providers(inputDF):
   RENAME_PAIRS = PROVIDERS_RENAME_PAIRS
   TARGET_TYPES = dict(PROVIDERS_BASE_TARGET_TYPES)
 
-  # Bulk assign types based on naming conventions
+  # bulk assign types based on naming conventions
   for _, column_name in RENAME_PAIRS:
       if "hrs_resday" in column_name:
           TARGET_TYPES[column_name] = "double"
       elif "turnover" in column_name and "count" not in column_name and "footnote" not in column_name:
           TARGET_TYPES[column_name] = "double"
       elif column_name.endswith("_rating") or "deficiencies" in column_name or "revisits" in column_name:
-          TARGET_TYPES[column_name] = "int"  # Ratings (1-5) and Deficiencies counts are integers
+          TARGET_TYPES[column_name] = "int"  # ratings & deficiencies counts are integers
       elif column_name.endswith("_score") and column_name != "total_weighted_health_survey_score":
-          TARGET_TYPES[column_name] = "int"  # Scores are integers (except weighted total handled above)    
+          TARGET_TYPES[column_name] = "int"  # scores are integers (except weighted total handled above)    
       elif "footnote" in column_name:
           TARGET_TYPES[column_name] = "int"
 
@@ -71,7 +62,7 @@ def clean_providers(inputDF):
   normalizedDF = inputDF.select(*exprs)
   cleanDF = dedupe(normalizedDF, "provider_id")
 
-  return cleanDF
+  return cleanDF.withColumn("updated_at", F.current_timestamp())
 
 def clean_staffing_levels(inputDF):
 
@@ -82,7 +73,6 @@ def clean_staffing_levels(inputDF):
   hr_columns = [t for _, t in RENAME_PAIRS if t.startswith("hrs_") and t not in TARGET_TYPES]
   for col in hr_columns:
       TARGET_TYPES[col] = "double"
-
 
   exprs = []
   for raw_name, clean_name in RENAME_PAIRS:
@@ -96,13 +86,13 @@ def clean_staffing_levels(inputDF):
   normalizedDF = inputDF.select(*exprs)
   cleanDF = dedupe(normalizedDF, ["provider_id", "work_date"])
 
-  return cleanDF
+  return cleanDF.withColumn("updated_at", F.current_timestamp())
     
 def generate_dim_dates(spark, start_date, end_date):
 
   days_diff = spark.sql(f"SELECT datediff('{end_date}', '{start_date}')").collect()[0][0]   # compute # days first
 
-  datesDF = spark.range(0, days_diff + 1).select(  # generate distributed IDs; scalable for billions of rows
+  datesDF = spark.range(0, days_diff + 1).select( 
       F.date_add(F.lit(start_date), F.col("id").cast("int")).alias("date")
   )
   dim_datesDF = (
@@ -118,44 +108,46 @@ def generate_dim_dates(spark, start_date, end_date):
       .withColumn("day_of_week_name",   F.date_format("date", "E"))
       .withColumn("is_weekday",        (F.col("day_of_week") <= 4).cast("boolean"))
   )
-  
-  return dim_datesDF
+  return dim_datesDF.withColumn("updated_at", F.current_timestamp())
 
+def overwrite_table(df, table):
+  df.write.mode("overwrite").insertInto(table, overwrite=True)
+
+def overwrite_partitions(spark, df, table, partition_col):
+  value_columns = [c for c in df.columns if c != partition_col]
+  df = df.select(*value_columns, partition_col)
+  df.write.mode("overwrite").insertInto(table, overwrite=True)
+  spark.sql(f"MSCK REPAIR TABLE {table}")
 
 def main_silver(spark, job_name, pipeline_mode, start_date):
 
   c = load_config(job_name="SILVER JOB")
   info(f"Starting job {c.job_name} in {c.env} environment.")
 
-  silver_bronze = {
-    "dim_claims":           "claims_raw",
-    "dim_providers":        "providers_raw",
-    "fct_staffing_levels":  "daily_staffing_raw"
-  }
-  silver_functions = {
-    "dim_claims":           clean_claims,
-    "dim_providers":        clean_providers,
-    "fct_staffing_levels":  clean_staffing_levels
+  silver_tables = {
+    "dim_claims":           ("claims_raw", clean_claims),
+    "dim_providers":        ("providers_raw", clean_providers),
+    "fct_staffing_levels":  ("daily_staffing_raw", clean_staffing_levels)
   }
 
   NO_START_DATE = "1900-01-01"
   if pipeline_mode == "full": 
     start_date = NO_START_DATE
 
-  for silver_table, bronze_table in silver_bronze.items():
+  for silver_table, (bronze_table, transform_function) in silver_tables.items():
     
 
     if silver_table == "fct_staffing_levels":
       inputDF = load_bronze_table(spark, f"{c.bronze_fqn}.{bronze_table}", start_date)
-      cleanDF = silver_functions[silver_table](inputDF).withColumn("updated_at", F.current_timestamp())
+      cleanDF = transform_function(inputDF)
       overwrite_partitions(spark, cleanDF, table=f"{c.silver_db}.{silver_table}", partition_col="ingest_date")
     else:
       inputDF = load_bronze_table(spark, f"{c.bronze_fqn}.{bronze_table}", NO_START_DATE)
-      cleanDF = silver_functions[silver_table](inputDF).withColumn("updated_at", F.current_timestamp())
+      cleanDF = transform_function(inputDF)
       overwrite_table(cleanDF, table=f"{c.silver_db}.{silver_table}")
 
 
-  dim_datesDF = generate_dim_dates(spark, start_date="2024-04-01", end_date="2024-06-30").withColumn("updated_at", F.current_timestamp())
+  dim_datesDF = generate_dim_dates(spark, start_date="2024-04-01", end_date="2024-06-30")
   overwrite_table(dim_datesDF, table=f"{c.silver_db}.dim_dates")
 
   table_counts(spark, schemas=[c.bronze_fqn, c.silver_fqn])
