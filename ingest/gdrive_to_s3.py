@@ -1,5 +1,5 @@
 """
-Main logic for incremental ingestion from Google Drive to S3 "raw" landing zone.
+Main logic for incremental ingestion from Google Drive to S3 "raw" landing zone; Called by lambda_function.py
 
 - Must specify a run mode when calling main():
   - Full refresh: loads all CSV files in source Google Drive folder
@@ -17,6 +17,7 @@ from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
+from config import load_config
 
 
 def _load_secret(secret_name) -> dict:
@@ -31,7 +32,8 @@ def _save_secret_str(secret_name, data: str):
 
 
 def get_drive_client():
-  SECRET_NAME = os.environ["OAUTH_SECRET_NAME"]  
+  c = load_config()
+  SECRET_NAME = c.oauth_secret_name
   token = _load_secret(SECRET_NAME)
 
   creds = Credentials.from_authorized_user_info(token)
@@ -219,10 +221,12 @@ def main(full_refresh=False, persist_state=False):
   mode = "Full Refresh" if full_refresh else "Incremental"
   print(f"Running ingest script in mode: {mode}")
 
-  DRIVE_ID = os.environ["DRIVE_ID"]
-  FOLDER_ID = os.environ["FOLDER_ID"]
-  BUCKET_NAME = os.environ["BUCKET_NAME"]
-  START_TOKEN_PATH = os.environ["START_TOKEN_PATH"]
+  c = load_config()
+
+  DRIVE_ID = c.drive_id
+  FOLDER_ID = c.folder_id
+  BUCKET_NAME = c.bucket_name
+  START_TOKEN_PATH = c.start_token_path
 
   s3 = boto3.client('s3')
   drive = get_drive_client()
