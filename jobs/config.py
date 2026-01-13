@@ -68,30 +68,6 @@ def load_config(job_name):
   return config
 
 
-# ============================================================================
-# IO UTILITIES 
-# ============================================================================
-
-# bronze
-
-def load_csv(spark, csv_path):
-  df = spark.read.csv(path = csv_path, header=True)
-  return df
-
-def append_table_path(df, path, partition_by=None):
-  if not partition_by:
-    df.write.mode("append").parquet(path)
-  else:
-    df.write.mode("append").partitionBy(partition_by).parquet(path)
-
-def overwrite_table(df, table):
-  df.write.mode("overwrite").insertInto(table, overwrite=True)
-
-def overwrite_partitions(spark, df, table, partition_col):
-  value_columns = [c for c in df.columns if c != partition_col]
-  df = df.select(*value_columns, partition_col)
-  df.write.mode("overwrite").insertInto(table, overwrite=True)
-  spark.sql(f"MSCK REPAIR TABLE {table}")
 
 
 CLAIMS_RENAME_PAIRS = [

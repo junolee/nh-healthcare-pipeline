@@ -1,5 +1,13 @@
 from config import *
 
+def overwrite_table(df, table):
+  df.write.mode("overwrite").insertInto(table, overwrite=True)
+
+def overwrite_partitions(spark, df, table, partition_col):
+  value_columns = [c for c in df.columns if c != partition_col]
+  df = df.select(*value_columns, partition_col)
+  df.write.mode("overwrite").insertInto(table, overwrite=True)
+  spark.sql(f"MSCK REPAIR TABLE {table}")
 
 def load_bronze_table(spark, table, start_date):
   df = spark.table(table)
